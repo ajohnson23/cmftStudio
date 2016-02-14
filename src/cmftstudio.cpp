@@ -40,6 +40,108 @@
 #include <dm/misc.h>
 #include <dm/pi.h>
 
+long int fsize(FILE* _file)
+{
+	long int pos = ftell(_file);
+	fseek(_file, 0L, SEEK_END);
+	long int size = ftell(_file);
+	fseek(_file, pos, SEEK_SET);
+	return size;
+}
+
+struct BgfxCallback : public bgfx::CallbackI
+{
+	virtual ~BgfxCallback()
+	{
+	}
+
+	virtual void fatal(bgfx::Fatal::Enum _code, const char* _str) BX_OVERRIDE
+	{
+		// Something unexpected happened, inform user and bail out.
+		dbgPrintf("Fatal error: 0x%08x: %s", _code, _str);
+
+		// Must terminate, continuing will cause crash anyway.
+		abort();
+	}
+
+	virtual void traceVargs(const char* _filePath, uint16_t _line, const char* _format, va_list _argList) BX_OVERRIDE
+	{
+		dbgPrintf("%s (%d): ", _filePath, _line);
+		dbgPrintfVargs(_format, _argList);
+	}
+
+	virtual uint32_t cacheReadSize(uint64_t _id) BX_OVERRIDE
+	{
+		char filePath[256];
+		bx::snprintf(filePath, sizeof(filePath), "temp/%016" PRIx64, _id);
+
+		// Use cache id as filename.
+		FILE* file = fopen(filePath, "rb");
+		if (NULL != file)
+		{
+			uint32_t size = fsize(file);
+			fclose(file);
+			// Return size of shader file.
+			return size;
+		}
+
+		// Return 0 if shader is not found.
+		return 0;
+	}
+
+	virtual bool cacheRead(uint64_t _id, void* _data, uint32_t _size) BX_OVERRIDE
+	{
+		char filePath[256];
+		bx::snprintf(filePath, sizeof(filePath), "temp/%016" PRIx64, _id);
+
+		// Use cache id as filename.
+		FILE* file = fopen(filePath, "rb");
+		if (NULL != file)
+		{
+			// Read shader.
+			size_t result = fread(_data, 1, _size, file);
+			fclose(file);
+
+			// Make sure that read size matches requested size.
+			return result == _size;
+		}
+
+		// Shader is not found in cache, needs to be rebuilt.
+		return false;
+	}
+
+	virtual void cacheWrite(uint64_t _id, const void* _data, uint32_t _size) BX_OVERRIDE
+	{
+		char filePath[256];
+		bx::snprintf(filePath, sizeof(filePath), "temp/%016" PRIx64, _id);
+
+		// Use cache id as filename.
+		FILE* file = fopen(filePath, "wb");
+		if (NULL != file)
+		{
+			// Write shader to cache location.
+			fwrite(_data, 1, _size, file);
+			fclose(file);
+		}
+	}
+
+	virtual void screenShot(const char* _filePath, uint32_t _width, uint32_t _height, uint32_t _pitch, const void* _data, uint32_t /*_size*/, bool _yflip) BX_OVERRIDE
+	{
+	}
+
+	virtual void captureBegin(uint32_t _width, uint32_t _height, uint32_t /*_pitch*/, bgfx::TextureFormat::Enum /*_format*/, bool _yflip) BX_OVERRIDE
+	{
+	}
+
+	virtual void captureEnd() BX_OVERRIDE
+	{
+	}
+
+	virtual void captureFrame(const void* _data, uint32_t /*_size*/) BX_OVERRIDE
+	{
+	}
+};
+
 // Camera.
 //-----
 
@@ -2056,10 +2158,12 @@ public:
         // Get parameters from cli.
         configFromCli(g_config, _argc, _argv);
 
-        // Init bgfx.
-        bgfx::init(g_config.m_renderer, BGFX_PCI_ID_NONE, 0, NULL, cs::bgfxAlloc);
+        BgfxCallback callback;
 
-        uint32_t reset = BGFX_RESET_VSYNC;
+        // Init bgfx.
+        bgfx::init(g_config.m_renderer, BGFX_PCI_ID_NONE, 0, &callback, cs::bgfxAlloc);
+
+        uint32_t reset = BGFX_RESET_VSYNC|BGFX_RESET_CAPTURE;
         bgfx::reset(g_config.m_width, g_config.m_height, reset);
 
         uint32_t debug = BGFX_DEBUG_NONE;
